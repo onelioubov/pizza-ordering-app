@@ -1,0 +1,3 @@
+# Lets reviewers run plain `docker compose up`. Definitions live in build/.
+include:
+  - build/compose.yaml

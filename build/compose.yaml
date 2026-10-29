@@ -1,0 +1,18 @@
+name: pizza-ordering
+
+services:
+  order-service:
+    build:
+      context: ..
+      dockerfile: build/OrderService.Dockerfile
+    ports:
+      - "5080:8080"
+
+  order-builder:
+    build:
+      context: ..
+      dockerfile: build/OrderBuilder.Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - order-service
