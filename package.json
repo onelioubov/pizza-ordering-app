@@ -1,0 +1,11 @@
+{
+  "name": "pizza-ordering",
+  "private": true,
+  "workspaces": [
+    "src/Pizza.OrderBuilder",
+    "tests/Pizza.OrderBuilder.Tests"
+  ],
+  "scripts": {
+    "test": "npm test -w tests/Pizza.OrderBuilder.Tests"
+  }
+}

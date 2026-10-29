@@ -19,4 +19,4 @@ Vite + React + TypeScript. Spec: `docs/spec.md` §7, §8. Plain markup is fine.
 
 ## Packages
 
-`react`, `react-dom`, `vite`, `typescript`, `@vitejs/plugin-react`.
+`react`, `react-dom`, `vite`, `typescript`, `@vitejs/plugin-react`, `@types/react`, `@types/react-dom`.
