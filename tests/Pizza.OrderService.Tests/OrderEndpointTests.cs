@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace Pizza.OrderService.Tests;
@@ -435,5 +436,150 @@ public class OrderEndpointTests : IDisposable
 
         Assert.That(updateStatus, Is.EqualTo(HttpStatusCode.NotFound));
         Assert.That(cancelStatus, Is.EqualTo(HttpStatusCode.NotFound));
+    }
+
+    /// <summary>The body with the total the customer last saw (spec §6.1).</summary>
+    private static JsonObject WithExpectedTotal(object body, decimal expectedTotal)
+    {
+        var json = JsonSerializer.SerializeToNode(body)!.AsObject();
+        json["expectedTotal"] = expectedTotal;
+        return json;
+    }
+
+    [Test]
+    public async Task Inv7_Submit_ExpectedTotalMismatch_Returns409WithPricing_AndCreatesNothing()
+    {
+        var key = Guid.NewGuid().ToString();
+
+        var (status, body, response) = await Submit(WithExpectedTotal(G2Body, 30.00m), key);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Conflict));
+            Assert.That(body.GetProperty("error").GetString(), Is.EqualTo("totalChanged"));
+            Assert.That(body.GetProperty("pricing").GetProperty("total").GetDecimal(), Is.EqualTo(32.27m));
+            Assert.That(body.TryGetProperty("id", out _), Is.False);
+            Assert.That(response.Headers.Location, Is.Null);
+        });
+
+        // Nothing was stored under the key: the corrected request runs fresh rather than replaying or returning 422.
+        var (retryStatus, order, _) = await Submit(WithExpectedTotal(G2Body, 32.27m), key);
+        Assert.That(retryStatus, Is.EqualTo(HttpStatusCode.Created));
+        Assert.That(order.GetProperty("pricing").GetProperty("total").GetDecimal(), Is.EqualTo(32.27m));
+    }
+
+    [Test]
+    public async Task Inv7_Update_ExpectedTotalMismatch_Returns409WithPricing_AndLeavesTheOrderUnchanged()
+    {
+        var id = await SubmitNewOrderId();
+        var before = await GetOrder(id);
+
+        var (status, body, _) = await Update(id, WithExpectedTotal(G4Body, 32.27m));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Conflict));
+            Assert.That(body.GetProperty("error").GetString(), Is.EqualTo("totalChanged"));
+            Assert.That(body.GetProperty("pricing").GetProperty("total").GetDecimal(), Is.EqualTo(23.24m));
+        });
+        Assert.That((await GetOrder(id)).GetRawText(), Is.EqualTo(before.GetRawText()));
+    }
+
+    [Test]
+    public async Task Inv7_MatchingExpectedTotal_IsAccepted_OnSubmitAndUpdate()
+    {
+        var (submitStatus, order, _) = await Submit(WithExpectedTotal(G2Body, 32.27m));
+        Assert.That(submitStatus, Is.EqualTo(HttpStatusCode.Created));
+
+        var (updateStatus, updated, _) = await Update(order.GetProperty("id").GetString()!, WithExpectedTotal(G4Body, 23.24m));
+
+        Assert.That(updateStatus, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That(updated.GetProperty("pricing").GetProperty("total").GetDecimal(), Is.EqualTo(23.24m));
+        Assert.That(updated.GetProperty("draft").TryGetProperty("expectedTotal", out _), Is.False);
+    }
+
+    [Test]
+    public async Task Inv8_TenConcurrentSubmitsWithOneKey_CreateOneOrder()
+    {
+        for (var round = 0; round < 50; round++)
+        {
+            var key = Guid.NewGuid().ToString();
+
+            var results = await Task.WhenAll(Enumerable.Range(0, 10).Select(_ => Task.Run(() => Submit(G2Body, key))));
+
+            Assert.That(results.Select(r => r.Status), Is.All.EqualTo(HttpStatusCode.Created), $"round {round}");
+            var ids = results.Select(r => r.Body.GetProperty("id").GetString()).Distinct().ToList();
+            Assert.That(ids, Has.Count.EqualTo(1), $"round {round}");
+            Assert.That(results.Select(r => r.Body.GetRawText()).Distinct().Count(), Is.EqualTo(1), $"round {round}");
+        }
+    }
+
+    [Test]
+    public async Task Inv8_SameKeyWithDifferentBody_Returns422()
+    {
+        var key = Guid.NewGuid().ToString();
+        var (firstStatus, _, _) = await Submit(G2Body, key);
+        Assert.That(firstStatus, Is.EqualTo(HttpStatusCode.Created));
+
+        var (status, problem, _) = await Submit(G4Body, key);
+
+        Assert.That(status, Is.EqualTo(HttpStatusCode.UnprocessableEntity));
+        Assert.That(problem.GetProperty("errors").TryGetProperty("Idempotency-Key", out _), Is.True);
+    }
+
+    [Test]
+    public async Task Inv8_FailedSubmit_StoresNothing_SoARetryWithTheSameKeyRunsAgain()
+    {
+        var key = Guid.NewGuid().ToString();
+        var (failedStatus, _, _) = await Submit(new { lineItems = Array.Empty<object>() }, key);
+        Assert.That(failedStatus, Is.EqualTo(HttpStatusCode.BadRequest));
+
+        var (status, _, _) = await Submit(G2Body, key);
+
+        Assert.That(status, Is.EqualTo(HttpStatusCode.Created));
+    }
+
+    [Test]
+    public async Task Inv8_KeysAreScopedByOperation()
+    {
+        var key = Guid.NewGuid().ToString();
+        var (submitStatus, order, _) = await Submit(G2Body, key);
+        Assert.That(submitStatus, Is.EqualTo(HttpStatusCode.Created));
+
+        var (cancelStatus, cancelled, _) = await Cancel(order.GetProperty("id").GetString()!, key);
+
+        Assert.That(cancelStatus, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That(cancelled.GetProperty("status").GetString(), Is.EqualTo("Cancelled"));
+    }
+
+    [Test]
+    public async Task Inv8_RepeatedUpdate_ReplaysTheStoredResponse_EvenAfterTheKitchenStarts()
+    {
+        var id = await SubmitNewOrderId();
+        var key = Guid.NewGuid().ToString();
+        var (status, updated, _) = await Update(id, G4Body, key);
+        Assert.That(status, Is.EqualTo(HttpStatusCode.OK));
+        await Advance(id);
+
+        var (replayStatus, replayed, _) = await Update(id, G4Body, key);
+
+        Assert.That(replayStatus, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That(replayed.GetRawText(), Is.EqualTo(updated.GetRawText()));
+        Assert.That((await GetOrder(id)).GetProperty("status").GetString(), Is.EqualTo("Started"));
+    }
+
+    [Test]
+    public async Task Inv8_CancelKeyReusedForAnotherOrder_Returns422_AndLeavesItAlone()
+    {
+        var first = await SubmitNewOrderId();
+        var second = await SubmitNewOrderId();
+        var key = Guid.NewGuid().ToString();
+        var (firstStatus, _, _) = await Cancel(first, key);
+        Assert.That(firstStatus, Is.EqualTo(HttpStatusCode.OK));
+
+        var (status, _, _) = await Cancel(second, key);
+
+        Assert.That(status, Is.EqualTo(HttpStatusCode.UnprocessableEntity));
+        Assert.That((await GetOrder(second)).GetProperty("status").GetString(), Is.EqualTo("NotStarted"));
     }
 }

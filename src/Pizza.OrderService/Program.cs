@@ -33,13 +33,17 @@ app.UseExceptionHandler(new ExceptionHandlerOptions
                 new Dictionary<string, string[]> { ["body"] = ["We couldn't read your order."] }, statusCode: e.StatusCode),
             OrderNotFoundException => Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "We couldn't find that order."),
             OrderStatusConflictException e => Results.Conflict(new { error = "statusConflict", order = e.Current }),
+            TotalChangedException e => Results.Conflict(new { error = "totalChanged", pricing = e.Pricing }),
+            IdempotencyKeyReusedException => Results.ValidationProblem(
+                new Dictionary<string, string[]> { ["Idempotency-Key"] = ["This Idempotency-Key was already used for a different request."] },
+                statusCode: StatusCodes.Status422UnprocessableEntity),
             _ => Results.Problem(statusCode: StatusCodes.Status500InternalServerError),
         };
         await result.ExecuteAsync(context);
     },
     // Customer input errors are expected; don't log them as unhandled exceptions.
     SuppressDiagnosticsCallback = c => c.Exception is InvalidDraftException or BadHttpRequestException
-        or OrderNotFoundException or OrderStatusConflictException,
+        or OrderNotFoundException or OrderStatusConflictException or TotalChangedException or IdempotencyKeyReusedException,
 });
 
 var api = app.MapGroup("/api");
@@ -52,22 +56,21 @@ api.MapGet("/menu", (PricingEngine engine) => new
 
 api.MapPost("/quotes", (OrderDraft draft, PricingEngine engine) => engine.Price(draft));
 
-// Slice 6 stores idempotency keys and compares ExpectedTotal (spec §6.1, §6.2); until then both are required or accepted, and unused.
 api.MapPost("/orders", (OrderRequest request, [Microsoft.AspNetCore.Mvc.FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, OrderBook orders) =>
 {
     if (string.IsNullOrWhiteSpace(idempotencyKey))
         return MissingIdempotencyKey();
-    var order = orders.Submit(request.ToDraft());
+    var order = orders.Submit(request.ToDraft(), request.ExpectedTotal, idempotencyKey);
     return Results.Created($"/api/orders/{order.Id}", order);
 });
 
 api.MapGet("/orders/{id}", (string id, OrderBook orders) => orders.Get(id));
 
 api.MapPut("/orders/{id}", (string id, OrderRequest request, [Microsoft.AspNetCore.Mvc.FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, OrderBook orders) =>
-    string.IsNullOrWhiteSpace(idempotencyKey) ? MissingIdempotencyKey() : Results.Ok(orders.Update(id, request.ToDraft())));
+    string.IsNullOrWhiteSpace(idempotencyKey) ? MissingIdempotencyKey() : Results.Ok(orders.Update(id, request.ToDraft(), request.ExpectedTotal, idempotencyKey)));
 
 api.MapPost("/orders/{id}/cancel", (string id, [Microsoft.AspNetCore.Mvc.FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, OrderBook orders) =>
-    string.IsNullOrWhiteSpace(idempotencyKey) ? MissingIdempotencyKey() : Results.Ok(orders.Cancel(id)));
+    string.IsNullOrWhiteSpace(idempotencyKey) ? MissingIdempotencyKey() : Results.Ok(orders.Cancel(id, idempotencyKey)));
 
 api.MapPost("/orders/{id}/advance", (string id, OrderBook orders) => orders.Advance(id));
 

@@ -1,3 +1,5 @@
+using Pizza.OrderService.Pricing;
+
 namespace Pizza.OrderService.Orders;
 
 /// <summary>No order has this ID.</summary>
@@ -9,3 +11,14 @@ public sealed class OrderStatusConflictException(Order current)
 {
     public Order Current { get; } = current;
 }
+
+/// <summary>The server's total differs from the one the customer saw (spec §6.1). Carries the server's pricing.</summary>
+public sealed class TotalChangedException(PricingResult pricing)
+    : Exception($"The total is now {pricing.Total}.")
+{
+    public PricingResult Pricing { get; } = pricing;
+}
+
+/// <summary>The idempotency key was already used for a different request of the same operation (spec §6.2).</summary>
+public sealed class IdempotencyKeyReusedException(string key)
+    : Exception($"Idempotency key '{key}' was already used for a different request.");

@@ -7,12 +7,14 @@ const POLL_MS = 3000;
  * A submitted order kept current (spec §7): polls its status every 3 s until it reaches a terminal
  * status. `refresh` fetches now; `advance` plays the kitchen; `cancel` is the customer's. Only the latest request's response is
  * shown, so a slow poll can't put back an older status. A failed fetch keeps the last order and sets
- * `error`; polling carries on.
+ * `error`; polling carries on. An unconfirmed cancel can be retried with its original key.
  */
 export function useOrderTracking(initial: Order) {
   const [order, setOrder] = useState(initial);
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
+  // The key of the last cancel that got no answer; Retry resends it (spec §7).
+  const [unconfirmedCancelKey, setUnconfirmedCancelKey] = useState<string | null>(null);
   const latest = useRef(0);
   const terminal = TERMINAL_STATUSES.includes(order.status);
 
@@ -57,6 +59,16 @@ export function useOrderTracking(initial: Order) {
     void track(call).finally(() => setBusy(false));
   };
 
+  const sendCancel = (key: string) => {
+    setUnconfirmedCancelKey(null);
+    run(() =>
+      cancelOrder(order.id, key).catch((e: unknown) => {
+        if (e instanceof ApiError && e.unconfirmed) setUnconfirmedCancelKey(key);
+        throw e;
+      }),
+    );
+  };
+
   return {
     order,
     error,
@@ -66,6 +78,9 @@ export function useOrderTracking(initial: Order) {
     refresh: () => run(() => getOrder(order.id)),
     advance: () => run(() => advanceOrder(order.id)),
     // A new key per click (spec §6.2).
-    cancel: () => run(() => cancelOrder(order.id, crypto.randomUUID())),
+    cancel: () => sendCancel(crypto.randomUUID()),
+    /** True when the last cancel went unconfirmed and the order still looks cancellable; offer `retryCancel`. */
+    canRetryCancel: unconfirmedCancelKey !== null && !busy && order.status === 'NotStarted',
+    retryCancel: () => unconfirmedCancelKey && sendCancel(unconfirmedCancelKey),
   };
 }

@@ -11,10 +11,23 @@ interface Props {
   onAdvance: () => void;
   onEdit: () => void;
   onCancel: () => void;
+  /** Shown when the last cancel went unconfirmed; resends it with the same key. */
+  onRetryCancel: (() => void) | null;
   onNewOrder: () => void;
 }
 
-export function OrderView({ order, error, terminal, busy, onRefresh, onAdvance, onEdit, onCancel, onNewOrder }: Props) {
+export function OrderView({
+  order,
+  error,
+  terminal,
+  busy,
+  onRefresh,
+  onAdvance,
+  onEdit,
+  onCancel,
+  onRetryCancel,
+  onNewOrder,
+}: Props) {
   const changeable = order.status === 'NotStarted' && !busy;
   return (
     <section>
@@ -45,6 +58,14 @@ export function OrderView({ order, error, terminal, busy, onRefresh, onAdvance, 
         <button type="button" onClick={onCancel} disabled={!changeable}>
           Cancel order
         </button>
+        {onRetryCancel && (
+          <>
+            {' '}
+            <button type="button" onClick={onRetryCancel}>
+              Retry
+            </button>
+          </>
+        )}
       </p>
 
       <button type="button" onClick={onNewOrder}>

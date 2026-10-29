@@ -10,7 +10,8 @@ public enum OrderStatus { NotStarted, Started, ReadyForPickup, Delivered, Cancel
 /// </summary>
 public sealed record Order(string Id, OrderStatus Status, OrderDraft Draft, PricingResult Pricing);
 
-internal enum OrderAction { Advance, Update, Cancel }
+// Submit has no transition; it's here so idempotency keys can be scoped by operation (spec §6.2).
+internal enum OrderAction { Submit, Advance, Update, Cancel }
 
 internal static class OrderTransitions
 {

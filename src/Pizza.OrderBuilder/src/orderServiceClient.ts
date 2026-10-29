@@ -1,6 +1,8 @@
 // The only module that talks to the order service (spec §8). Money values are server
 // amounts: display them, never compute with them.
 
+import { formatMoney } from './money';
+
 export interface MenuSize {
   id: string;
   name: string;
@@ -79,18 +81,31 @@ export class ApiError extends Error {
   readonly fieldErrors: Record<string, string[]>;
   /** On a status conflict (409), the order as the server has it now. */
   readonly currentOrder: Order | null;
+  /** On a total conflict (409), the server's pricing of the draft that was sent. */
+  readonly pricing: Quote | null;
+  /**
+   * True when a submit, update or cancel never got an answer, even after retries: it may or may not have
+   * happened. Retry it with the same `Idempotency-Key` to find out without doing it twice.
+   */
+  readonly unconfirmed: boolean;
 
   constructor(
     message: string,
     status: number | null = null,
-    fieldErrors: Record<string, string[]> = {},
-    currentOrder: Order | null = null,
+    details: {
+      fieldErrors?: Record<string, string[]>;
+      currentOrder?: Order;
+      pricing?: Quote;
+      unconfirmed?: boolean;
+    } = {},
   ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
-    this.fieldErrors = fieldErrors;
-    this.currentOrder = currentOrder;
+    this.fieldErrors = details.fieldErrors ?? {};
+    this.currentOrder = details.currentOrder ?? null;
+    this.pricing = details.pricing ?? null;
+    this.unconfirmed = details.unconfirmed ?? false;
   }
 
   /** Every message to show, field messages first, labelled by pizza where they belong to one. */
@@ -104,6 +119,8 @@ export class ApiError extends Error {
 }
 
 const TIMEOUT_MS = 5000;
+/** Waits before each retry of a submit, update or cancel (spec §7): three retries after the first try. */
+const RETRY_DELAYS_MS = [250, 500, 1000];
 
 export function getMenu(signal?: AbortSignal): Promise<Menu> {
   return request<Menu>('/menu', { method: 'GET', signal });
@@ -115,10 +132,10 @@ export function getQuote(draft: OrderDraft, signal?: AbortSignal): Promise<Quote
 
 /**
  * Submits the draft as a new order. `expectedTotal` is the total the customer last saw (spec §6.1);
- * pass a new `idempotencyKey` per user action.
+ * pass a new `idempotencyKey` per user action, and the same one to retry an `unconfirmed` failure.
  */
 export function submitOrder(draft: OrderDraft, expectedTotal: number, idempotencyKey: string): Promise<Order> {
-  return request<Order>('/orders', {
+  return mutate<Order>('/orders', {
     method: 'POST',
     body: JSON.stringify({ ...draft, expectedTotal }),
     headers: { 'Idempotency-Key': idempotencyKey },
@@ -127,19 +144,23 @@ export function submitOrder(draft: OrderDraft, expectedTotal: number, idempotenc
 
 /**
  * Replaces the order's whole draft (spec §6). Only allowed before the kitchen starts. `expectedTotal`
- * is the total the customer last saw; pass a new `idempotencyKey` per user action.
+ * is the total the customer last saw; pass a new `idempotencyKey` per user action, and the same one to
+ * retry an `unconfirmed` failure.
  */
 export function updateOrder(id: string, draft: OrderDraft, expectedTotal: number, idempotencyKey: string): Promise<Order> {
-  return request<Order>(
+  return mutate<Order>(
     `/orders/${encodeURIComponent(id)}`,
     { method: 'PUT', body: JSON.stringify({ ...draft, expectedTotal }), headers: { 'Idempotency-Key': idempotencyKey } },
     customerChangeConflict,
   );
 }
 
-/** Cancels the order. Only allowed before the kitchen starts; cancelling twice is fine. */
+/**
+ * Cancels the order. Only allowed before the kitchen starts; cancelling twice is fine. Pass a new
+ * `idempotencyKey` per user action, and the same one to retry an `unconfirmed` failure.
+ */
 export function cancelOrder(id: string, idempotencyKey: string): Promise<Order> {
-  return request<Order>(
+  return mutate<Order>(
     `/orders/${encodeURIComponent(id)}/cancel`,
     { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey } },
     customerChangeConflict,
@@ -178,6 +199,34 @@ const customerChangeConflict: ConflictMessage = (current) =>
   current.status === 'Cancelled' ? alreadyInStatus(current) : 'The kitchen already started your order.';
 
 /**
+ * Sends a submit, update or cancel, retrying up to three times with backoff when it gets no answer
+ * (network error, timeout, 5xx). Every attempt carries the same `Idempotency-Key`, so the server applies
+ * it at most once (spec §6.2). Answers from the server (4xx) are final and not retried.
+ */
+async function mutate<T>(
+  path: string,
+  init: Omit<RequestInit, 'signal' | 'headers'> & { headers: { 'Idempotency-Key': string } },
+  conflictMessage?: ConflictMessage,
+): Promise<T> {
+  for (let retry = 0; ; retry++) {
+    try {
+      return await request<T>(path, init, conflictMessage);
+    } catch (e) {
+      if (!(e instanceof ApiError) || !isTransient(e)) throw e;
+      if (retry === RETRY_DELAYS_MS.length) {
+        throw new ApiError("We couldn't confirm your order yet.", e.status, { unconfirmed: true });
+      }
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[retry]));
+    }
+  }
+}
+
+/** No answer, or the server failed: the request may or may not have been applied. */
+function isTransient(e: ApiError): boolean {
+  return e.status === null || e.status >= 500;
+}
+
+/**
  * Sends one request with the 5 s timeout. Throws ApiError for anything the customer should see;
  * if the caller's own signal aborts, rethrows the AbortError so the caller can ignore it.
  */
@@ -212,12 +261,17 @@ async function errorFrom(response: Response, conflictMessage: ConflictMessage): 
   if (response.status === 404) return new ApiError("We couldn't find that order.", response.status);
 
   const problem = (await response.json().catch(() => null)) as
-    | { errors?: Record<string, string[]>; error?: string; order?: Order }
+    | { errors?: Record<string, string[]>; error?: string; order?: Order; pricing?: Quote }
     | null;
   if (problem?.error === 'statusConflict' && problem.order) {
-    return new ApiError(conflictMessage(problem.order), response.status, {}, problem.order);
+    return new ApiError(conflictMessage(problem.order), response.status, { currentOrder: problem.order });
+  }
+  if (problem?.error === 'totalChanged' && problem.pricing) {
+    return new ApiError(`Your total changed to ${formatMoney(problem.pricing.total)}.`, response.status, {
+      pricing: problem.pricing,
+    });
   }
   const fieldErrors = problem?.errors ?? {};
   const first = Object.values(fieldErrors).flat()[0];
-  return new ApiError(first ?? 'Something went wrong with your request.', response.status, fieldErrors);
+  return new ApiError(first ?? 'Something went wrong with your request.', response.status, { fieldErrors });
 }

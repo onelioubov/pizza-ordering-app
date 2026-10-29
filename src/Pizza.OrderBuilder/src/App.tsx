@@ -89,6 +89,7 @@ function OrderTracker({
       onAdvance={tracking.advance}
       onEdit={() => onEdit(tracking.order)}
       onCancel={tracking.cancel}
+      onRetryCancel={tracking.canRetryCancel ? tracking.retryCancel : null}
       onNewOrder={onNewOrder}
     />
   );
@@ -152,6 +153,14 @@ function OrderBuilder({
       >
         {draft.submitting ? (editing ? 'Saving…' : 'Submitting…') : editing ? 'Save changes' : 'Submit order'}
       </button>
+      {draft.canRetry && (
+        <>
+          {' '}
+          <button type="button" onClick={() => void draft.retry().then((order) => order && onSubmitted(order))}>
+            Retry
+          </button>
+        </>
+      )}
       {onBack && (
         <>
           {' '}
