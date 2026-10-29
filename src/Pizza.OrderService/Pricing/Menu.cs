@@ -4,7 +4,7 @@ namespace Pizza.OrderService.Pricing;
 
 internal sealed record Size(string Id, string Name, decimal BasePrice);
 
-internal sealed record Topping(string Id, string Name, decimal CategoryRate);
+internal sealed record Topping(string Id, string Name, string Category, decimal CategoryRate);
 
 /// <summary>Sizes, toppings and promotions parsed from menu.json, indexed for pricing.</summary>
 internal sealed class Menu
@@ -27,7 +27,7 @@ internal sealed class Menu
         Sizes = file.Sizes.ToDictionary(s => s.Id, s => new Size(s.Id, s.Name, s.BasePrice));
 
         var rates = file.ToppingCategories.ToDictionary(c => c.Id, c => c.Rate);
-        Toppings = file.Toppings.ToDictionary(t => t.Id, t => new Topping(t.Id, t.Name,
+        Toppings = file.Toppings.ToDictionary(t => t.Id, t => new Topping(t.Id, t.Name, t.Category,
             rates.TryGetValue(t.Category, out var rate)
                 ? rate
                 : throw new InvalidOperationException($"Topping '{t.Id}' has unknown category '{t.Category}'.")));

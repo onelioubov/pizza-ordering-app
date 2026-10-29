@@ -11,6 +11,9 @@ public sealed class PricingEngine
 
     public PricingEngine() : this(Menu.LoadEmbedded()) { }
 
+    /// <summary>The menu this engine prices against, for `GET /api/menu`.</summary>
+    internal Menu Menu => _menu;
+
     private PricingEngine(Menu menu) => _menu = menu;
 
     /// <summary>An engine over a menu other than the embedded one, in the same JSON shape as menu.json.</summary>
@@ -87,6 +90,12 @@ public sealed class PricingEngine
         {
             var item = draft.LineItems[i];
             var prefix = $"lineItems[{i}]";
+
+            if (item is null)
+            {
+                AddError(errors, prefix, "This pizza is missing its size and quantity.");
+                continue;
+            }
 
             if (!_menu.Sizes.TryGetValue(item.Size ?? "", out var size))
                 AddError(errors, $"{prefix}.size", $"We don't have a size called '{item.Size}'.");
