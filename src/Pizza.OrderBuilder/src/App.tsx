@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react';
-import { ApiError, getMenu, type Menu, type TipMode } from './orderServiceClient';
+import { ApiError, getMenu, type Menu, type Order, type TipMode } from './orderServiceClient';
 import { useOrderDraft } from './useOrderDraft';
+import { useOrderTracking } from './useOrderTracking';
 import { LineItemEditor } from './components/LineItemEditor';
 import { QuoteSummary } from './components/QuoteSummary';
+import { OrderView } from './components/OrderView';
 
 export default function App() {
   const [menu, setMenu] = useState<Menu | null>(null);
   const [menuError, setMenuError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [order, setOrder] = useState<Order | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -26,8 +29,10 @@ export default function App() {
   return (
     <main>
       <h1>Pizza order builder</h1>
-      {menu ? (
-        <OrderBuilder menu={menu} />
+      {order ? (
+        <OrderTracker key={order.id} order={order} onNewOrder={() => setOrder(null)} />
+      ) : menu ? (
+        <OrderBuilder menu={menu} onSubmitted={setOrder} />
       ) : menuError ? (
         <p role="alert">
           {menuError}{' '}
@@ -42,7 +47,22 @@ export default function App() {
   );
 }
 
-function OrderBuilder({ menu }: { menu: Menu }) {
+function OrderTracker({ order, onNewOrder }: { order: Order; onNewOrder: () => void }) {
+  const tracking = useOrderTracking(order);
+  return (
+    <OrderView
+      order={tracking.order}
+      error={tracking.error}
+      terminal={tracking.terminal}
+      busy={tracking.busy}
+      onRefresh={tracking.refresh}
+      onAdvance={tracking.advance}
+      onNewOrder={onNewOrder}
+    />
+  );
+}
+
+function OrderBuilder({ menu, onSubmitted }: { menu: Menu; onSubmitted: (order: Order) => void }) {
   const draft = useOrderDraft(menu);
   const { form } = draft;
 
@@ -82,10 +102,20 @@ function OrderBuilder({ menu }: { menu: Menu }) {
 
       <QuoteSummary quote={draft.quote} outOfDate={draft.outOfDate} failed={draft.failed} error={draft.error} />
 
-      {/* Sends the order in slice 4; gated on a fresh quote now (spec §7). */}
-      <button type="button" disabled={!draft.quote || draft.outOfDate || draft.failed}>
-        Submit order
+      <button
+        type="button"
+        disabled={!draft.canSubmit}
+        onClick={() => void draft.submit().then((order) => order && onSubmitted(order))}
+      >
+        {draft.submitting ? 'Submitting…' : 'Submit order'}
       </button>
+      {draft.submitError && (
+        <ul role="alert" style={{ color: 'crimson' }}>
+          {draft.submitError.messages.map((m, i) => (
+            <li key={i}>{m}</li>
+          ))}
+        </ul>
+      )}
     </>
   );
 }

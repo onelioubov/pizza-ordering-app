@@ -19,18 +19,27 @@ public sealed class PricingEngine
     /// <summary>An engine over a menu other than the embedded one, in the same JSON shape as menu.json.</summary>
     public static PricingEngine FromMenuJson(string menuJson) => new(Menu.FromJson(menuJson));
 
+    /// <param name="rejectUnknownPromo">
+    /// True for submit and update, where an unknown code is a validation error. Quotes price without it instead (spec §3.3).
+    /// </param>
     /// <exception cref="InvalidDraftException">The draft breaks a rule in spec §4.</exception>
-    public PricingResult Price(OrderDraft draft)
+    public PricingResult Price(OrderDraft draft, bool rejectUnknownPromo = false)
     {
         var lines = ValidateLines(draft, out var errors);
         ValidateTip(draft.Tip, errors);
+
+        var code = draft.PromoCode?.Trim();
+        var promotion = string.IsNullOrEmpty(code) ? null : _menu.Promotions.GetValueOrDefault(code);
+        if (rejectUnknownPromo && !string.IsNullOrEmpty(code) && promotion is null)
+            AddError(errors, "promoCode", UnknownPromoMessage(code));
+
         if (errors.Count > 0)
             throw new InvalidDraftException(errors.ToDictionary(e => e.Key, e => e.Value.ToArray()));
 
         var pricedLines = lines.Select(PriceLine).ToList();
         var subtotal = pricedLines.Sum(l => l.LineTotal);
 
-        var (promo, discount) = ApplyPromotion(draft.PromoCode, subtotal);
+        var (promo, discount) = ApplyPromotion(code, promotion, subtotal);
         var tax = Money.RoundCents(TaxRate * (subtotal - discount));
         var tip = draft.Tip is null ? 0m : Money.RoundCents(draft.Tip.Mode switch
         {
@@ -58,14 +67,17 @@ public sealed class PricingEngine
         return new PricedLineItem($"{line.Quantity} x {line.Size.Name} pizza{toppingText}", unitPrice, unitPrice * line.Quantity);
     }
 
-    private (PromoResult? Promo, decimal Discount) ApplyPromotion(string? promoCode, decimal subtotal)
+    private static string UnknownPromoMessage(string code) => $"Promo code {code} isn't valid.";
+
+    /// <param name="code">The trimmed code the customer entered.</param>
+    /// <param name="promotion">The menu's promotion for that code, or null if there isn't one.</param>
+    private static (PromoResult? Promo, decimal Discount) ApplyPromotion(string? code, IPromotion? promotion, decimal subtotal)
     {
-        var code = promoCode?.Trim();
         if (string.IsNullOrEmpty(code))
             return (null, 0m);
 
-        if (!_menu.Promotions.TryGetValue(code, out var promotion))
-            return (new PromoResult(code, false, $"Promo code {code} isn't valid."), 0m);
+        if (promotion is null)
+            return (new PromoResult(code, false, UnknownPromoMessage(code)), 0m);
 
         var outcome = promotion.Evaluate(subtotal);
         if (outcome.IneligibleMessage is not null)

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ApiError, getQuote, type Menu, type OrderDraft, type Quote, type TipMode } from './orderServiceClient';
+import { ApiError, getQuote, submitOrder, type Menu, type Order, type OrderDraft, type Quote, type TipMode } from './orderServiceClient';
 
 const QUOTE_DEBOUNCE_MS = 250;
 const WHOLE_NUMBER = /^\d*$/;
@@ -25,6 +25,7 @@ export interface DraftForm {
  * The order being built, and the server's live quote for it (spec §7). Every edit requests a new
  * quote after a 250 ms pause; responses for anything but the latest edit are dropped. When a quote
  * fails, the last good one stays available, `outOfDate` stays true and `error` says why.
+ * `submit` sends the quoted draft with the quoted total as `expectedTotal`.
  */
 export function useOrderDraft(menu: Menu) {
   const [form, setForm] = useState<DraftForm>(() => ({
@@ -35,6 +36,8 @@ export function useOrderDraft(menu: Menu) {
   }));
   const [quoted, setQuoted] = useState<{ form: DraftForm; quote: Quote } | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<ApiError | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -65,15 +68,40 @@ export function useOrderDraft(menu: Menu) {
   const updateLineItem = (key: number, change: Partial<LineItemForm>) =>
     setForm((f) => ({ ...f, lineItems: f.lineItems.map((li) => (li.key === key ? { ...li, ...change } : li)) }));
 
+  const outOfDate = quoted?.form !== form;
+  const canSubmit = quoted !== null && !outOfDate && error === null && !submitting;
+
+  /** Submits the draft as quoted. Resolves with the order, or null if it failed (`submitError` says why). */
+  const submit = async (): Promise<Order | null> => {
+    const draft = quoted && canSubmit ? toOrderDraft(quoted.form) : null;
+    if (!quoted || !draft) return null;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      // A new key per click (spec §6.2). Retries that reuse it come in slice 6.
+      return await submitOrder(draft, quoted.quote.total, crypto.randomUUID());
+    } catch (e) {
+      setSubmitError(e instanceof ApiError ? e : new ApiError('Something went wrong while sending your order.'));
+      return null;
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return {
     form,
     /** The last successful quote. May be for an earlier draft; check `outOfDate`. */
     quote: quoted?.quote ?? null,
     /** True until a quote for the current draft arrives. */
-    outOfDate: quoted?.form !== form,
+    outOfDate,
     /** True when the latest quote request failed; `error` holds the messages. */
     failed: error !== null,
     error,
+    /** True when the current draft has a fresh quote and nothing is being sent. */
+    canSubmit,
+    submitting,
+    submitError,
+    submit,
 
     addLineItem: () => setForm((f) => ({ ...f, lineItems: [...f.lineItems, newLineItem(menu)] })),
     removeLineItem: (key: number) => setForm((f) => ({ ...f, lineItems: f.lineItems.filter((li) => li.key !== key) })),
