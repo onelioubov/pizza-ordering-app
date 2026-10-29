@@ -49,6 +49,10 @@ public class MenuAndQuoteEndpointTests : IDisposable
             Assert.That(line.GetProperty("description").GetString(), Is.EqualTo("2 x Large pizza with bacon, pineapple"));
             Assert.That(line.GetProperty("unitPrice").GetDecimal(), Is.EqualTo(14.64m));
             Assert.That(line.GetProperty("lineTotal").GetDecimal(), Is.EqualTo(29.28m));
+            Assert.That(line.GetProperty("quantity").GetInt32(), Is.EqualTo(2));
+            Assert.That(line.GetProperty("size").GetString(), Is.EqualTo("Large"));
+            Assert.That(line.GetProperty("toppings").GetRawText(),
+                Is.EqualTo("""[{"name":"bacon","price":1.32},{"name":"pineapple","price":1.32}]"""));
             Assert.That(quote.GetProperty("subtotal").GetDecimal(), Is.EqualTo(29.28m));
             Assert.That(promo.GetProperty("code").GetString(), Is.EqualTo("ILOVEPIZZA"));
             Assert.That(promo.GetProperty("applied").GetBoolean(), Is.True);

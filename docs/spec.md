@@ -156,7 +156,11 @@ POST /api/quotes
 
 ```json
 {
-  "lineItems": [{ "description": "2 x Large pizza with bacon, pineapple", "unitPrice": 14.64, "lineTotal": 29.28 }],
+  "lineItems": [{
+    "description": "2 x Large pizza with bacon, pineapple", "unitPrice": 14.64, "lineTotal": 29.28,
+    "quantity": 2, "size": "Large",
+    "toppings": [{ "name": "bacon", "price": 1.32 }, { "name": "pineapple", "price": 1.32 }]
+  }],
   "subtotal": 29.28,
   "promo": { "code": "ILOVEPIZZA", "applied": true, "message": null },
   "discount": 2.93,

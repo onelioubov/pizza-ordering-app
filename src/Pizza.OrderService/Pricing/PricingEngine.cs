@@ -60,11 +60,13 @@ public sealed class PricingEngine
 
     private static PricedLineItem PriceLine((Size Size, int Quantity, IReadOnlyList<Topping> Toppings) line)
     {
-        var unitPrice = line.Size.BasePrice + line.Toppings.Sum(t => Money.RoundCents(line.Size.BasePrice * t.CategoryRate));
-        var toppingText = line.Toppings.Count == 0
+        var toppings = line.Toppings.Select(t => new PricedTopping(t.Name, Money.RoundCents(line.Size.BasePrice * t.CategoryRate))).ToList();
+        var unitPrice = line.Size.BasePrice + toppings.Sum(t => t.Price);
+        var toppingText = toppings.Count == 0
             ? " (no toppings)"
-            : " with " + string.Join(", ", line.Toppings.Select(t => t.Name));
-        return new PricedLineItem($"{line.Quantity} x {line.Size.Name} pizza{toppingText}", unitPrice, unitPrice * line.Quantity);
+            : " with " + string.Join(", ", toppings.Select(t => t.Name));
+        return new PricedLineItem(
+            $"{line.Quantity} x {line.Size.Name} pizza{toppingText}", unitPrice, unitPrice * line.Quantity, line.Quantity, line.Size.Name, toppings);
     }
 
     private static string UnknownPromoMessage(string code) => $"Promo code {code} isn't valid.";

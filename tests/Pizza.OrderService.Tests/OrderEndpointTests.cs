@@ -92,6 +92,8 @@ public class OrderEndpointTests : IDisposable
             Assert.That(pricing.GetProperty("tip").GetDecimal(), Is.EqualTo(4.21m));
             Assert.That(pricing.GetProperty("total").GetDecimal(), Is.EqualTo(32.27m));
             Assert.That(pricing.GetProperty("description").GetString(), Is.EqualTo("2 x Large pizza with bacon, pineapple"));
+            Assert.That(pricing.GetProperty("lineItems")[0].GetProperty("toppings").GetRawText(),
+                Is.EqualTo("""[{"name":"bacon","price":1.32},{"name":"pineapple","price":1.32}]"""));
         });
 
         var (getStatus, fetched, _) = await Read(await _client.GetAsync($"/api/orders/{id}"));

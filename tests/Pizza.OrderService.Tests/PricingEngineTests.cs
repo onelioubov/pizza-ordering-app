@@ -80,6 +80,47 @@ public class PricingEngineTests
     }
 
     [Test]
+    public void Inv1_GoldenCase_G2_LineItemBreakdown()
+    {
+        var draft = Draft(Line("large", 2, "bacon", "pineapple")) with { PromoCode = "ILOVEPIZZA", Tip = new TipDraft(TipMode.Percent, 15m) };
+
+        var line = _engine.Price(draft).LineItems[0];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(line.Quantity, Is.EqualTo(2));
+            Assert.That(line.Size, Is.EqualTo("Large"));
+            Assert.That(line.Toppings, Is.EqualTo(new[] { new PricedTopping("bacon", 1.32m), new PricedTopping("pineapple", 1.32m) }));
+        });
+    }
+
+    [Test]
+    public void Inv1_GoldenCase_G6_ToppingPricesAreRoundedEach()
+    {
+        var engine = PricingEngine.FromMenuJson(TestMenuJson);
+
+        var line = engine.Price(Draft(Line("test", 2, "pepperoni", "bacon"))).LineItems[0];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(line.Toppings, Is.EqualTo(new[] { new PricedTopping("pepperoni", 0.68m), new PricedTopping("bacon", 0.94m) }));
+            Assert.That(line.UnitPrice, Is.EqualTo(10.12m));
+        });
+    }
+
+    [Test]
+    public void Inv1_GoldenCase_G1_LineItemBreakdown_HasNoToppings()
+    {
+        var line = _engine.Price(Draft(Line("small", 1))).LineItems[0];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(line.Size, Is.EqualTo("Small"));
+            Assert.That(line.Toppings, Is.Empty);
+        });
+    }
+
+    [Test]
     public void Description_HasOneLinePerLineItem()
     {
         var result = _engine.Price(Draft(Line("large", 2, "bacon", "pineapple"), Line("small", 1)));

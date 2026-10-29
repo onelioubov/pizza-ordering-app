@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ApiError, Quote } from '../orderServiceClient';
+import type { ApiError, Quote, QuoteLineItem } from '../orderServiceClient';
 import { formatMoney } from '../money';
 
 interface Props {
@@ -34,11 +34,7 @@ export function QuoteSummary({ quote, outOfDate, failed, error }: Props) {
           <table>
             <tbody>
               {quote.lineItems.map((li, i) => (
-                <tr key={i}>
-                  <td>{li.description}</td>
-                  <td>{formatMoney(li.unitPrice)} each</td>
-                  <td>{formatMoney(li.lineTotal)}</td>
-                </tr>
+                <LineItemRows key={i} item={li} />
               ))}
               <Row label="Subtotal" amount={quote.subtotal} />
               <Row label={quote.promo?.applied ? `Discount (${quote.promo.code})` : 'Discount'} amount={quote.discount} />
@@ -62,6 +58,32 @@ export function QuoteSummary({ quote, outOfDate, failed, error }: Props) {
       )}
     </section>
   );
+}
+
+/** The pizza on one row, then each topping indented beneath it with its price per pizza. */
+function LineItemRows({ item }: { item: QuoteLineItem }) {
+  return (
+    <>
+      <tr>
+        <td>
+          {item.quantity} x {item.size} pizza{item.toppings.length === 0 && ' (no toppings)'}
+        </td>
+        <td>{formatMoney(item.unitPrice)} each</td>
+        <td>{formatMoney(item.lineTotal)}</td>
+      </tr>
+      {item.toppings.map((t) => (
+        <tr key={t.name}>
+          <td style={{ paddingLeft: '1.5em' }}>{capitalize(t.name)}</td>
+          <td>+{formatMoney(t.price)}</td>
+          <td />
+        </tr>
+      ))}
+    </>
+  );
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function Row({ label, amount }: { label: string; amount: number }) {

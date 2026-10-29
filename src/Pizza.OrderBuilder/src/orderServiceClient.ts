@@ -32,8 +32,19 @@ export interface OrderDraft {
   tip?: { mode: TipMode; value: number };
 }
 
+export interface QuoteLineItem {
+  description: string;
+  unitPrice: number;
+  lineTotal: number;
+  quantity: number;
+  /** Size name, e.g. "Large". */
+  size: string;
+  /** Each topping with its price on one pizza. */
+  toppings: { name: string; price: number }[];
+}
+
 export interface Quote {
-  lineItems: { description: string; unitPrice: number; lineTotal: number }[];
+  lineItems: QuoteLineItem[];
   subtotal: number;
   promo: { code: string; applied: boolean; message: string | null } | null;
   discount: number;
