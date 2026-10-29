@@ -1,3 +1,6 @@
 # Lets reviewers run plain `docker compose up`. Definitions live in build/.
+# The project name goes here: a name inside an included file is ignored.
+name: pizza-ordering
+
 include:
   - build/compose.yaml

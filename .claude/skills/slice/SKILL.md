@@ -15,8 +15,8 @@ Slice to build: $ARGUMENTS (if empty, the next unfinished slice below).
 4. Submit and status (including polling and advance).
 5. Update and cancel, with conflicts.
 6. Idempotent retries and `expectedTotal`.
-7. Frontend client tests.
-8. Containers (`build/`).
+7. Containers (`build/`).
+8. Frontend client tests.
 9. README.
 
 ## Steps

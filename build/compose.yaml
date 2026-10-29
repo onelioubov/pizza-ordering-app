@@ -1,5 +1,3 @@
-name: pizza-ordering
-
 services:
   order-service:
     build:
