@@ -17,7 +17,7 @@ public sealed class OrderBook(PricingEngine engine)
     {
         lock (_lock)
         {
-            var order = new Order($"ord_{Guid.CreateVersion7():N}", OrderStatus.NotStarted, engine.Price(draft, rejectUnknownPromo: true));
+            var order = new Order($"ord_{Guid.CreateVersion7():N}", OrderStatus.NotStarted, draft, engine.Price(draft, rejectUnknownPromo: true));
             _orders.Add(order.Id, order);
             return order;
         }
@@ -35,14 +35,28 @@ public sealed class OrderBook(PricingEngine engine)
     /// <exception cref="OrderStatusConflictException">The order is Delivered or Cancelled.</exception>
     public Order Advance(string id) => Apply(id, OrderAction.Advance);
 
-    private Order Apply(string id, OrderAction action)
+    /// <summary>Replaces the whole draft and reprices it. Only while the order is NotStarted (spec §6).</summary>
+    /// <exception cref="OrderNotFoundException" />
+    /// <exception cref="OrderStatusConflictException">The kitchen has started, or the order is Cancelled.</exception>
+    /// <exception cref="InvalidDraftException">The draft breaks a rule in spec §4, including an unknown promo code.</exception>
+    public Order Update(string id, OrderDraft draft) =>
+        Apply(id, OrderAction.Update, order => order with { Draft = draft, Pricing = engine.Price(draft, rejectUnknownPromo: true) });
+
+    /// <summary>Cancels a NotStarted order. Cancelling a cancelled order returns it unchanged.</summary>
+    /// <exception cref="OrderNotFoundException" />
+    /// <exception cref="OrderStatusConflictException">The kitchen has started, or the order is Delivered.</exception>
+    public Order Cancel(string id) => Apply(id, OrderAction.Cancel);
+
+    /// <summary>Checks the transition, then applies <paramref name="change"/> and the new status, all under the lock.</summary>
+    private Order Apply(string id, OrderAction action, Func<Order, Order>? change = null)
     {
         lock (_lock)
         {
             var order = Find(id);
             if (!OrderTransitions.TryApply(order.Status, action, out var next))
                 throw new OrderStatusConflictException(order);
-            return _orders[id] = order with { Status = next };
+            var changed = change is null ? order : change(order);
+            return _orders[id] = changed with { Status = next };
         }
     }
 

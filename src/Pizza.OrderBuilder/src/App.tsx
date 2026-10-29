@@ -11,6 +11,7 @@ export default function App() {
   const [menuError, setMenuError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [order, setOrder] = useState<Order | null>(null);
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -29,8 +30,29 @@ export default function App() {
   return (
     <main>
       <h1>Pizza order builder</h1>
-      {order ? (
-        <OrderTracker key={order.id} order={order} onNewOrder={() => setOrder(null)} />
+      {order && editing && menu ? (
+        <OrderBuilder
+          menu={menu}
+          editing={order}
+          onSubmitted={(updated) => {
+            setOrder(updated);
+            setEditing(false);
+          }}
+          onBack={(current) => {
+            if (current) setOrder(current);
+            setEditing(false);
+          }}
+        />
+      ) : order ? (
+        <OrderTracker
+          key={order.id}
+          order={order}
+          onEdit={(current) => {
+            setOrder(current);
+            setEditing(true);
+          }}
+          onNewOrder={() => setOrder(null)}
+        />
       ) : menu ? (
         <OrderBuilder menu={menu} onSubmitted={setOrder} />
       ) : menuError ? (
@@ -47,7 +69,15 @@ export default function App() {
   );
 }
 
-function OrderTracker({ order, onNewOrder }: { order: Order; onNewOrder: () => void }) {
+function OrderTracker({
+  order,
+  onEdit,
+  onNewOrder,
+}: {
+  order: Order;
+  onEdit: (current: Order) => void;
+  onNewOrder: () => void;
+}) {
   const tracking = useOrderTracking(order);
   return (
     <OrderView
@@ -57,13 +87,26 @@ function OrderTracker({ order, onNewOrder }: { order: Order; onNewOrder: () => v
       busy={tracking.busy}
       onRefresh={tracking.refresh}
       onAdvance={tracking.advance}
+      onEdit={() => onEdit(tracking.order)}
+      onCancel={tracking.cancel}
       onNewOrder={onNewOrder}
     />
   );
 }
 
-function OrderBuilder({ menu, onSubmitted }: { menu: Menu; onSubmitted: (order: Order) => void }) {
-  const draft = useOrderDraft(menu);
+/** Builds a new order or, given `editing`, changes that one. `onBack` gets the server's order if a conflict reported it. */
+function OrderBuilder({
+  menu,
+  editing,
+  onSubmitted,
+  onBack,
+}: {
+  menu: Menu;
+  editing?: Order;
+  onSubmitted: (order: Order) => void;
+  onBack?: (current: Order | null) => void;
+}) {
+  const draft = useOrderDraft(menu, editing);
   const { form } = draft;
 
   return (
@@ -107,8 +150,16 @@ function OrderBuilder({ menu, onSubmitted }: { menu: Menu; onSubmitted: (order: 
         disabled={!draft.canSubmit}
         onClick={() => void draft.submit().then((order) => order && onSubmitted(order))}
       >
-        {draft.submitting ? 'Submitting…' : 'Submit order'}
+        {draft.submitting ? (editing ? 'Saving…' : 'Submitting…') : editing ? 'Save changes' : 'Submit order'}
       </button>
+      {onBack && (
+        <>
+          {' '}
+          <button type="button" disabled={draft.submitting} onClick={() => onBack(draft.submitError?.currentOrder ?? null)}>
+            Back to order
+          </button>
+        </>
+      )}
       {draft.submitError && (
         <ul role="alert" style={{ color: 'crimson' }}>
           {draft.submitError.messages.map((m, i) => (

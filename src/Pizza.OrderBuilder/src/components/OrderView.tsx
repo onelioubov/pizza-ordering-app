@@ -9,10 +9,13 @@ interface Props {
   busy: boolean;
   onRefresh: () => void;
   onAdvance: () => void;
+  onEdit: () => void;
+  onCancel: () => void;
   onNewOrder: () => void;
 }
 
-export function OrderView({ order, error, terminal, busy, onRefresh, onAdvance, onNewOrder }: Props) {
+export function OrderView({ order, error, terminal, busy, onRefresh, onAdvance, onEdit, onCancel, onNewOrder }: Props) {
+  const changeable = order.status === 'NotStarted' && !busy;
   return (
     <section>
       <p>
@@ -34,6 +37,15 @@ export function OrderView({ order, error, terminal, busy, onRefresh, onAdvance, 
       )}
 
       <QuoteSummary quote={order.pricing} outOfDate={false} failed={false} error={null} />
+
+      <p>
+        <button type="button" onClick={onEdit} disabled={!changeable}>
+          Edit order
+        </button>{' '}
+        <button type="button" onClick={onCancel} disabled={!changeable}>
+          Cancel order
+        </button>
+      </p>
 
       <button type="button" onClick={onNewOrder}>
         New order

@@ -140,7 +140,7 @@ Base path `/api`, JSON. Money is a JSON number with 2 decimal places: the server
 | POST | `/orders` | required | 201 order | 400, 409 total changed, 422 |
 | GET | `/orders/{id}` | – | 200 order | 404 |
 | PUT | `/orders/{id}` | required | 200 order | 400, 404, 409 not NotStarted or total changed, 422 |
-| POST | `/orders/{id}/cancel` | required | 200 order | 404, 409, 422 |
+| POST | `/orders/{id}/cancel` | required | 200 order | 400, 404, 409, 422 |
 | POST | `/orders/{id}/advance` | – | 200 order | 404, 409 terminal |
 
 **Quote**
@@ -176,8 +176,10 @@ Idempotency-Key: 7f3c9a1e-...
 ```
 
 ```json
-{ "id": "ord_01H...", "status": "NotStarted", "pricing": { ...quote fields... } }
+{ "id": "ord_01H...", "status": "NotStarted", "draft": { ...request body without expectedTotal... }, "pricing": { ...quote fields... } }
 ```
+
+Every order response includes `draft`, the line items, promo code and tip from its last write, so "Edit order" loads what the server holds.
 
 A total mismatch returns 409 with `{ "error": "totalChanged", "pricing": { ... } }`.
 

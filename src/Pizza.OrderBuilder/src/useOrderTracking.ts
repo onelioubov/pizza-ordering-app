@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ApiError, advanceOrder, getOrder, TERMINAL_STATUSES, type Order } from './orderServiceClient';
+import { ApiError, advanceOrder, cancelOrder, getOrder, TERMINAL_STATUSES, type Order } from './orderServiceClient';
 
 const POLL_MS = 3000;
 
 /**
  * A submitted order kept current (spec §7): polls its status every 3 s until it reaches a terminal
- * status. `refresh` fetches now; `advance` plays the kitchen. Only the latest request's response is
+ * status. `refresh` fetches now; `advance` plays the kitchen; `cancel` is the customer's. Only the latest request's response is
  * shown, so a slow poll can't put back an older status. A failed fetch keeps the last order and sets
  * `error`; polling carries on.
  */
@@ -65,5 +65,7 @@ export function useOrderTracking(initial: Order) {
     busy,
     refresh: () => run(() => getOrder(order.id)),
     advance: () => run(() => advanceOrder(order.id)),
+    // A new key per click (spec §6.2).
+    cancel: () => run(() => cancelOrder(order.id, crypto.randomUUID())),
   };
 }

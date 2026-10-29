@@ -1,5 +1,15 @@
 import { useEffect, useState } from 'react';
-import { ApiError, getQuote, submitOrder, type Menu, type Order, type OrderDraft, type Quote, type TipMode } from './orderServiceClient';
+import {
+  ApiError,
+  getQuote,
+  submitOrder,
+  updateOrder,
+  type Menu,
+  type Order,
+  type OrderDraft,
+  type Quote,
+  type TipMode,
+} from './orderServiceClient';
 
 const QUOTE_DEBOUNCE_MS = 250;
 const WHOLE_NUMBER = /^\d*$/;
@@ -25,15 +35,11 @@ export interface DraftForm {
  * The order being built, and the server's live quote for it (spec §7). Every edit requests a new
  * quote after a 250 ms pause; responses for anything but the latest edit are dropped. When a quote
  * fails, the last good one stays available, `outOfDate` stays true and `error` says why.
- * `submit` sends the quoted draft with the quoted total as `expectedTotal`.
+ * `submit` sends the quoted draft with the quoted total as `expectedTotal`: as a new order, or, when
+ * `editing` is given, as an update replacing that order's draft (spec §6).
  */
-export function useOrderDraft(menu: Menu) {
-  const [form, setForm] = useState<DraftForm>(() => ({
-    lineItems: [newLineItem(menu)],
-    promoCode: '',
-    tipMode: 'percent',
-    tipValue: '',
-  }));
+export function useOrderDraft(menu: Menu, editing?: Order) {
+  const [form, setForm] = useState<DraftForm>(() => (editing ? formFrom(editing) : emptyForm(menu)));
   const [quoted, setQuoted] = useState<{ form: DraftForm; quote: Quote } | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -79,7 +85,10 @@ export function useOrderDraft(menu: Menu) {
     setSubmitError(null);
     try {
       // A new key per click (spec §6.2). Retries that reuse it come in slice 6.
-      return await submitOrder(draft, quoted.quote.total, crypto.randomUUID());
+      const key = crypto.randomUUID();
+      return await (editing
+        ? updateOrder(editing.id, draft, quoted.quote.total, key)
+        : submitOrder(draft, quoted.quote.total, key));
     } catch (e) {
       setSubmitError(e instanceof ApiError ? e : new ApiError('Something went wrong while sending your order.'));
       return null;
@@ -135,6 +144,26 @@ let nextKey = 1;
 
 function newLineItem(menu: Menu): LineItemForm {
   return { key: nextKey++, size: menu.sizes[0]?.id ?? '', quantity: '1', toppings: [] };
+}
+
+function emptyForm(menu: Menu): DraftForm {
+  return { lineItems: [newLineItem(menu)], promoCode: '', tipMode: 'percent', tipValue: '' };
+}
+
+/** The stored order's draft as form text, for editing. */
+function formFrom(order: Order): DraftForm {
+  const { draft } = order;
+  return {
+    lineItems: draft.lineItems.map((li) => ({
+      key: nextKey++,
+      size: li.size,
+      quantity: String(li.quantity),
+      toppings: li.toppings ?? [],
+    })),
+    promoCode: draft.promoCode ?? '',
+    tipMode: draft.tip?.mode ?? 'percent',
+    tipValue: draft.tip ? String(draft.tip.value) : '',
+  };
 }
 
 /**

@@ -45,9 +45,17 @@ export interface Quote {
 
 export type OrderStatus = 'NotStarted' | 'Started' | 'ReadyForPickup' | 'Delivered' | 'Cancelled';
 
+/** The draft as the server stored it. Fields the customer left out come back as null. */
+export interface StoredDraft {
+  lineItems: { size: string; quantity: number; toppings: string[] | null }[];
+  promoCode: string | null;
+  tip: { mode: TipMode; value: number } | null;
+}
+
 export interface Order {
   id: string;
   status: OrderStatus;
+  draft: StoredDraft;
   pricing: Quote;
 }
 
@@ -106,6 +114,27 @@ export function submitOrder(draft: OrderDraft, expectedTotal: number, idempotenc
   });
 }
 
+/**
+ * Replaces the order's whole draft (spec §6). Only allowed before the kitchen starts. `expectedTotal`
+ * is the total the customer last saw; pass a new `idempotencyKey` per user action.
+ */
+export function updateOrder(id: string, draft: OrderDraft, expectedTotal: number, idempotencyKey: string): Promise<Order> {
+  return request<Order>(
+    `/orders/${encodeURIComponent(id)}`,
+    { method: 'PUT', body: JSON.stringify({ ...draft, expectedTotal }), headers: { 'Idempotency-Key': idempotencyKey } },
+    customerChangeConflict,
+  );
+}
+
+/** Cancels the order. Only allowed before the kitchen starts; cancelling twice is fine. */
+export function cancelOrder(id: string, idempotencyKey: string): Promise<Order> {
+  return request<Order>(
+    `/orders/${encodeURIComponent(id)}/cancel`,
+    { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey } },
+    customerChangeConflict,
+  );
+}
+
 export function getOrder(id: string, signal?: AbortSignal): Promise<Order> {
   return request<Order>(`/orders/${encodeURIComponent(id)}`, { method: 'GET', signal });
 }
@@ -128,11 +157,24 @@ export function describeStatus(status: OrderStatus): string {
   return STATUS_TEXT[status];
 }
 
+/** Says why a status conflict (409) refused the change, given the order as it is now. */
+type ConflictMessage = (current: Order) => string;
+
+const alreadyInStatus: ConflictMessage = (current) => `This order is already ${describeStatus(current.status)}.`;
+
+/** Update and cancel: the customer was too late (spec §7). */
+const customerChangeConflict: ConflictMessage = (current) =>
+  current.status === 'Cancelled' ? alreadyInStatus(current) : 'The kitchen already started your order.';
+
 /**
  * Sends one request with the 5 s timeout. Throws ApiError for anything the customer should see;
  * if the caller's own signal aborts, rethrows the AbortError so the caller can ignore it.
  */
-async function request<T>(path: string, init: RequestInit & { signal?: AbortSignal }): Promise<T> {
+async function request<T>(
+  path: string,
+  init: RequestInit & { signal?: AbortSignal },
+  conflictMessage: ConflictMessage = alreadyInStatus,
+): Promise<T> {
   const timeout = AbortSignal.timeout(TIMEOUT_MS);
   const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
   try {
@@ -145,7 +187,7 @@ async function request<T>(path: string, init: RequestInit & { signal?: AbortSign
         ...(init.headers as Record<string, string> | undefined),
       },
     });
-    if (!response.ok) throw await errorFrom(response);
+    if (!response.ok) throw await errorFrom(response, conflictMessage);
     return (await response.json()) as T;
   } catch (e) {
     if (e instanceof ApiError || init.signal?.aborted) throw e;
@@ -154,7 +196,7 @@ async function request<T>(path: string, init: RequestInit & { signal?: AbortSign
   }
 }
 
-async function errorFrom(response: Response): Promise<ApiError> {
+async function errorFrom(response: Response, conflictMessage: ConflictMessage): Promise<ApiError> {
   if (response.status >= 500) return new ApiError("The order service isn't available right now.", response.status);
   if (response.status === 404) return new ApiError("We couldn't find that order.", response.status);
 
@@ -162,7 +204,7 @@ async function errorFrom(response: Response): Promise<ApiError> {
     | { errors?: Record<string, string[]>; error?: string; order?: Order }
     | null;
   if (problem?.error === 'statusConflict' && problem.order) {
-    return new ApiError(`This order is already ${describeStatus(problem.order.status)}.`, response.status, {}, problem.order);
+    return new ApiError(conflictMessage(problem.order), response.status, {}, problem.order);
   }
   const fieldErrors = problem?.errors ?? {};
   const first = Object.values(fieldErrors).flat()[0];

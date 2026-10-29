@@ -42,6 +42,30 @@ public class OrderEndpointTests : IDisposable
     private async Task<(HttpStatusCode Status, JsonElement Body, HttpResponseMessage Response)> Advance(string id) =>
         await Read(await _client.PostAsync($"/api/orders/{id}/advance", null));
 
+    private async Task<(HttpStatusCode Status, JsonElement Body, HttpResponseMessage Response)> Update(string id, object body, string? key = null)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Put, $"/api/orders/{id}") { Content = JsonContent.Create(body) };
+        request.Headers.Add("Idempotency-Key", key ?? Guid.NewGuid().ToString());
+        return await Read(await _client.SendAsync(request));
+    }
+
+    private async Task<(HttpStatusCode Status, JsonElement Body, HttpResponseMessage Response)> Cancel(string id, string? key = null)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/orders/{id}/cancel");
+        request.Headers.Add("Idempotency-Key", key ?? Guid.NewGuid().ToString());
+        return await Read(await _client.SendAsync(request));
+    }
+
+    private async Task<JsonElement> GetOrder(string id) =>
+        await (await _client.GetAsync($"/api/orders/{id}")).Content.ReadFromJsonAsync<JsonElement>();
+
+    private static readonly object G4Body = new
+    {
+        lineItems = new[] { new { size = "large", quantity = 2, toppings = Array.Empty<string>() } },
+        promoCode = "SAVE5",
+        tip = new { mode = "amount", value = 3.00m },
+    };
+
     private static async Task<(HttpStatusCode, JsonElement, HttpResponseMessage)> Read(HttpResponseMessage response)
     {
         var raw = await response.Content.ReadAsStringAsync();
@@ -206,5 +230,208 @@ public class OrderEndpointTests : IDisposable
 
         Assert.That(getStatus, Is.EqualTo(HttpStatusCode.NotFound));
         Assert.That(advanceStatus, Is.EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task Inv3_Update_RepricesLikeTheQuote_StoresTheNewDraft_AndGetReturnsIt()
+    {
+        var id = await SubmitNewOrderId();
+        var quote = await (await _client.PostAsJsonAsync("/api/quotes", G4Body)).Content.ReadFromJsonAsync<JsonElement>();
+
+        var (status, order, _) = await Update(id, G4Body);
+
+        Assert.That(status, Is.EqualTo(HttpStatusCode.OK));
+        var draft = order.GetProperty("draft");
+        Assert.Multiple(() =>
+        {
+            Assert.That(order.GetProperty("id").GetString(), Is.EqualTo(id));
+            Assert.That(order.GetProperty("status").GetString(), Is.EqualTo("NotStarted"));
+            Assert.That(order.GetProperty("pricing").GetRawText(), Is.EqualTo(quote.GetRawText()));
+            Assert.That(order.GetProperty("pricing").GetProperty("total").GetDecimal(), Is.EqualTo(23.24m));
+            Assert.That(draft.GetProperty("lineItems")[0].GetProperty("size").GetString(), Is.EqualTo("large"));
+            Assert.That(draft.GetProperty("lineItems")[0].GetProperty("quantity").GetInt32(), Is.EqualTo(2));
+            Assert.That(draft.GetProperty("promoCode").GetString(), Is.EqualTo("SAVE5"));
+            Assert.That(draft.GetProperty("tip").GetProperty("mode").GetString(), Is.EqualTo("amount"));
+        });
+        Assert.That((await GetOrder(id)).GetRawText(), Is.EqualTo(order.GetRawText()));
+    }
+
+    [Test]
+    public async Task Inv5_Update_Rejects_UnknownPromoCode_AndLeavesTheOrderUnchanged()
+    {
+        var id = await SubmitNewOrderId();
+        var before = await GetOrder(id);
+
+        var (status, problem, _) = await Update(id, new { lineItems = new[] { new { size = "small", quantity = 1 } }, promoCode = "XYZ" });
+
+        Assert.That(status, Is.EqualTo(HttpStatusCode.BadRequest));
+        Assert.That(problem.GetProperty("errors").GetProperty("promoCode")[0].GetString(), Is.EqualTo("Promo code XYZ isn't valid."));
+        Assert.That((await GetOrder(id)).GetRawText(), Is.EqualTo(before.GetRawText()));
+    }
+
+    [Test]
+    public async Task Inv5_Update_Rejects_EmptyOrder_AndLeavesTheOrderUnchanged()
+    {
+        var id = await SubmitNewOrderId();
+        var before = await GetOrder(id);
+
+        var (status, problem, _) = await Update(id, new { lineItems = Array.Empty<object>() });
+
+        Assert.That(status, Is.EqualTo(HttpStatusCode.BadRequest));
+        Assert.That(problem.GetProperty("errors").GetProperty("lineItems")[0].GetString(), Is.EqualTo("Add at least one pizza to your order."));
+        Assert.That((await GetOrder(id)).GetRawText(), Is.EqualTo(before.GetRawText()));
+    }
+
+    [Test]
+    public async Task Inv4_Update_Save5AtExactlyTwentyDollars_IsAcceptedWithoutDiscountAndSaysWhy()
+    {
+        var id = await SubmitNewOrderId();
+
+        var (status, order, _) = await Update(id, new { lineItems = new[] { new { size = "small", quantity = 4 } }, promoCode = "SAVE5" });
+
+        Assert.That(status, Is.EqualTo(HttpStatusCode.OK));
+        var pricing = order.GetProperty("pricing");
+        Assert.Multiple(() =>
+        {
+            Assert.That(pricing.GetProperty("discount").GetDecimal(), Is.EqualTo(0.00m));
+            Assert.That(pricing.GetProperty("total").GetDecimal(), Is.EqualTo(21.30m));
+            Assert.That(pricing.GetProperty("promo").GetProperty("message").GetString(), Is.EqualTo("SAVE5 requires a subtotal over $20.00."));
+        });
+    }
+
+    [Test]
+    public async Task Inv6_UpdateAndCancel_AfterTheKitchenStarts_Return409WithCurrentStatus_AndChangeNothing()
+    {
+        var id = await SubmitNewOrderId();
+        await Advance(id);
+        var before = await GetOrder(id);
+
+        var (updateStatus, updateConflict, _) = await Update(id, G4Body);
+        var (cancelStatus, cancelConflict, _) = await Cancel(id);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(updateStatus, Is.EqualTo(HttpStatusCode.Conflict));
+            Assert.That(updateConflict.GetProperty("error").GetString(), Is.EqualTo("statusConflict"));
+            Assert.That(updateConflict.GetProperty("order").GetProperty("status").GetString(), Is.EqualTo("Started"));
+            Assert.That(cancelStatus, Is.EqualTo(HttpStatusCode.Conflict));
+            Assert.That(cancelConflict.GetProperty("error").GetString(), Is.EqualTo("statusConflict"));
+            Assert.That(cancelConflict.GetProperty("order").GetProperty("status").GetString(), Is.EqualTo("Started"));
+        });
+        Assert.That((await GetOrder(id)).GetRawText(), Is.EqualTo(before.GetRawText()));
+    }
+
+    [Test]
+    public async Task Inv6_Cancel_DeliveredOrder_Returns409()
+    {
+        var id = await SubmitNewOrderId();
+        for (var i = 0; i < 3; i++) await Advance(id);
+
+        var (status, conflict, _) = await Cancel(id);
+
+        Assert.That(status, Is.EqualTo(HttpStatusCode.Conflict));
+        Assert.That(conflict.GetProperty("order").GetProperty("status").GetString(), Is.EqualTo("Delivered"));
+    }
+
+    [Test]
+    public async Task Inv6_Cancel_NotStartedOrder_Cancels_AndCancellingAgainReturnsTheOrder()
+    {
+        var id = await SubmitNewOrderId();
+
+        var (status, cancelled, _) = await Cancel(id);
+        var (againStatus, again, _) = await Cancel(id);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(cancelled.GetProperty("status").GetString(), Is.EqualTo("Cancelled"));
+            Assert.That(againStatus, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(again.GetRawText(), Is.EqualTo(cancelled.GetRawText()));
+        });
+    }
+
+    [Test]
+    public async Task Inv6_CancelledOrder_RejectsAdvanceAndUpdate_With409()
+    {
+        var id = await SubmitNewOrderId();
+        await Cancel(id);
+
+        var (advanceStatus, advanceConflict, _) = await Advance(id);
+        var (updateStatus, updateConflict, _) = await Update(id, G4Body);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(advanceStatus, Is.EqualTo(HttpStatusCode.Conflict));
+            Assert.That(advanceConflict.GetProperty("order").GetProperty("status").GetString(), Is.EqualTo("Cancelled"));
+            Assert.That(updateStatus, Is.EqualTo(HttpStatusCode.Conflict));
+            Assert.That(updateConflict.GetProperty("order").GetProperty("status").GetString(), Is.EqualTo("Cancelled"));
+        });
+    }
+
+    [Test]
+    public async Task Inv9_CancelRacingAdvance_ExactlyOneWins()
+    {
+        for (var round = 0; round < 300; round++)
+        {
+            var id = await SubmitNewOrderId();
+
+            var results = await Task.WhenAll(Task.Run(() => Cancel(id)), Task.Run(() => Advance(id)));
+
+            var (cancel, advance) = (results[0], results[1]);
+            Assert.That(results.Count(r => r.Status == HttpStatusCode.OK), Is.EqualTo(1), $"round {round}");
+            Assert.That(results.Count(r => r.Status == HttpStatusCode.Conflict), Is.EqualTo(1), $"round {round}");
+            var expected = cancel.Status == HttpStatusCode.OK ? "Cancelled" : "Started";
+            var loser = cancel.Status == HttpStatusCode.OK ? advance : cancel;
+            Assert.That(loser.Body.GetProperty("order").GetProperty("status").GetString(), Is.EqualTo(expected), $"round {round}");
+            Assert.That((await GetOrder(id)).GetProperty("status").GetString(), Is.EqualTo(expected), $"round {round}");
+        }
+    }
+
+    [Test]
+    public async Task Inv9_UpdateRacingAdvance_IsLinearizable()
+    {
+        for (var round = 0; round < 300; round++)
+        {
+            var id = await SubmitNewOrderId();
+
+            var results = await Task.WhenAll(Task.Run(() => Update(id, G4Body)), Task.Run(() => Advance(id)));
+
+            var (update, advance) = (results[0], results[1]);
+            Assert.That(advance.Status, Is.EqualTo(HttpStatusCode.OK), $"round {round}");
+            var final = await GetOrder(id);
+            Assert.That(final.GetProperty("status").GetString(), Is.EqualTo("Started"), $"round {round}");
+            // The update either landed before the kitchen started (and its pricing stuck) or was refused.
+            var expectedTotal = update.Status == HttpStatusCode.OK ? 23.24m : 32.27m;
+            Assert.That(update.Status, Is.EqualTo(HttpStatusCode.OK).Or.EqualTo(HttpStatusCode.Conflict), $"round {round}");
+            Assert.That(final.GetProperty("pricing").GetProperty("total").GetDecimal(), Is.EqualTo(expectedTotal), $"round {round}");
+        }
+    }
+
+    [Test]
+    public async Task UpdateAndCancel_WithoutIdempotencyKey_Return400()
+    {
+        var id = await SubmitNewOrderId();
+
+        var (updateStatus, updateProblem, _) = await Read(await _client.PutAsJsonAsync($"/api/orders/{id}", G4Body));
+        var (cancelStatus, cancelProblem, _) = await Read(await _client.PostAsync($"/api/orders/{id}/cancel", null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(updateStatus, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(updateProblem.GetProperty("errors").TryGetProperty("Idempotency-Key", out _), Is.True);
+            Assert.That(cancelStatus, Is.EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(cancelProblem.GetProperty("errors").TryGetProperty("Idempotency-Key", out _), Is.True);
+        });
+        Assert.That((await GetOrder(id)).GetProperty("status").GetString(), Is.EqualTo("NotStarted"));
+    }
+
+    [Test]
+    public async Task UnknownOrderId_Returns404_OnUpdateAndCancel()
+    {
+        var (updateStatus, _, _) = await Update("ord_missing", G4Body);
+        var (cancelStatus, _, _) = await Cancel("ord_missing");
+
+        Assert.That(updateStatus, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(cancelStatus, Is.EqualTo(HttpStatusCode.NotFound));
     }
 }

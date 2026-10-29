@@ -52,20 +52,29 @@ api.MapGet("/menu", (PricingEngine engine) => new
 
 api.MapPost("/quotes", (OrderDraft draft, PricingEngine engine) => engine.Price(draft));
 
+// Slice 6 stores idempotency keys and compares ExpectedTotal (spec §6.1, §6.2); until then both are required or accepted, and unused.
 api.MapPost("/orders", (OrderRequest request, [Microsoft.AspNetCore.Mvc.FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, OrderBook orders) =>
 {
     if (string.IsNullOrWhiteSpace(idempotencyKey))
-        return Results.ValidationProblem(new Dictionary<string, string[]> { ["Idempotency-Key"] = ["Idempotency-Key header is required."] });
-    // Slice 6 stores the key and compares ExpectedTotal (spec §6.1, §6.2); until then both are accepted and unused.
+        return MissingIdempotencyKey();
     var order = orders.Submit(request.ToDraft());
     return Results.Created($"/api/orders/{order.Id}", order);
 });
 
 api.MapGet("/orders/{id}", (string id, OrderBook orders) => orders.Get(id));
 
+api.MapPut("/orders/{id}", (string id, OrderRequest request, [Microsoft.AspNetCore.Mvc.FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, OrderBook orders) =>
+    string.IsNullOrWhiteSpace(idempotencyKey) ? MissingIdempotencyKey() : Results.Ok(orders.Update(id, request.ToDraft())));
+
+api.MapPost("/orders/{id}/cancel", (string id, [Microsoft.AspNetCore.Mvc.FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, OrderBook orders) =>
+    string.IsNullOrWhiteSpace(idempotencyKey) ? MissingIdempotencyKey() : Results.Ok(orders.Cancel(id)));
+
 api.MapPost("/orders/{id}/advance", (string id, OrderBook orders) => orders.Advance(id));
 
 app.Run();
+
+static IResult MissingIdempotencyKey() =>
+    Results.ValidationProblem(new Dictionary<string, string[]> { ["Idempotency-Key"] = ["Idempotency-Key header is required."] });
 
 /// <summary>The submit and update body: a draft plus the total the customer last saw (spec §6.1).</summary>
 internal sealed record OrderRequest(IReadOnlyList<LineItemDraft>? LineItems, string? PromoCode, TipDraft? Tip, decimal? ExpectedTotal)
