@@ -6,4 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Pricing/menu.json" LogicalName="Pizza.OrderService.Pricing.menu.json" />
+  </ItemGroup>
+
 </Project>

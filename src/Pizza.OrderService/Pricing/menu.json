@@ -1,0 +1,29 @@
+{
+  "sizes": [
+    { "id": "small", "name": "Small", "basePrice": 5.00 },
+    { "id": "medium", "name": "Medium", "basePrice": 7.00 },
+    { "id": "large", "name": "Large", "basePrice": 12.00 }
+  ],
+  "toppingCategories": [
+    { "id": "basic", "rate": 0.08 },
+    { "id": "premium", "rate": 0.11 }
+  ],
+  "toppings": [
+    { "id": "pepperoni", "name": "pepperoni", "category": "basic" },
+    { "id": "sausage", "name": "sausage", "category": "basic" },
+    { "id": "extra-cheese", "name": "extra cheese", "category": "basic" },
+    { "id": "onions", "name": "onions", "category": "basic" },
+    { "id": "black-olives", "name": "black olives", "category": "basic" },
+    { "id": "green-peppers", "name": "green peppers", "category": "basic" },
+    { "id": "bacon", "name": "bacon", "category": "premium" },
+    { "id": "chicken", "name": "chicken", "category": "premium" },
+    { "id": "garlic", "name": "garlic", "category": "premium" },
+    { "id": "artichoke-hearts", "name": "artichoke hearts", "category": "premium" },
+    { "id": "sun-dried-tomatoes", "name": "sun-dried tomatoes", "category": "premium" },
+    { "id": "pineapple", "name": "pineapple", "category": "premium" }
+  ],
+  "promotions": [
+    { "code": "ILOVEPIZZA", "kind": "PercentOff", "group": "order-discount", "parameters": { "percent": 10 } },
+    { "code": "SAVE5", "kind": "AmountOffOverThreshold", "group": "order-discount", "parameters": { "amount": 5.00, "threshold": 20.00 } }
+  ]
+}
