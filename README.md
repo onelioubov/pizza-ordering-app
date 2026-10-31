@@ -163,6 +163,7 @@ curl -X POST http://localhost:5080/api/orders/ord_01a189fc3df67a3a8aa419ef686be6
 These are the assumptions made based on ambiguities in the stated requirements only. They do not include decisions made from things unstated, like if there should be a cap on the amount of pizzas a customer can get (I made the decision to cap that at 20), or whether extra toppings are allowed (I decided that they're not, for simplicity in the timebox), etc. I hope that's okay. If I misunderstood what needs to be in the assumptions, I'm happy to provide more decisions I made.
 
 # Design Write-up
+> Human-written
 
 *"How do you represent money and calculate the order total? Where is pricing logic located, and does it run in the order builder, the order service, or both? Why?"*
 
